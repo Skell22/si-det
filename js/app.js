@@ -92,13 +92,16 @@ async function findPictures(text) {
 // board always see the real fixed grid.
 // The right-hand column (the folders) always stays the right-hand column.
 function fitLayout(n, right) {
-  const w = grid.clientWidth || innerWidth;
+  // Measure the space the board may use, not the board's current width.
+  const box = grid.parentElement;
+  const cs = getComputedStyle(box);
+  const w = (box.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)) || innerWidth;
   const h = grid.clientHeight || innerHeight;
   let best = null;
   for (let rows = Math.max(1, right); rows <= Math.max(n, right, 1); rows++) {
     const cols = Math.ceil(n / rows) + (right ? 1 : 0);
     // Biggest key wins; keys may be a little wider than tall, not much taller than wide.
-    const score = Math.min(w / cols, (h / rows) * 1.3);
+    const score = Math.min(w / cols, (h / rows) * 1.2);
     if (!best || score > best.score + 0.5) best = { rows, cols, score };
   }
   return best;
@@ -895,5 +898,15 @@ askToKeepData();
 // Offline files. On localhost it only runs with ?sw=1, so edits show up straight away while developing.
 const isLocal = location.hostname === 'localhost';
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || (isLocal && location.search.includes('sw=1')))) {
+  const hadVersion = !!navigator.serviceWorker.controller;
   navigator.serviceWorker.register('sw.js').catch(() => {});
+  // Then fetch the picture library in the background (only what's missing).
+  navigator.serviceWorker.ready.then((reg) => reg.active?.postMessage('fill-library'));
+  // A new version took over: reload once to show it, unless a grown-up is busy.
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadVersion) return;
+    const reload = () => location.reload();
+    if (!state.editing && !document.querySelector('dialog[open]')) reload();
+    else addEventListener('pointerdown', () => { if (!state.editing && !document.querySelector('dialog[open]')) reload(); });
+  });
 }

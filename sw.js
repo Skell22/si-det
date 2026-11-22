@@ -16,12 +16,18 @@ async function fillLibrary() {
   for (let i = 0; i < todo.length; i += 24) await Promise.allSettled(todo.slice(i, i + 24).map((f) => c.add(f)));
 }
 
+// A new version takes over as soon as the app's own files are in. The library is
+// fetched afterwards, when the page asks for it, so it never holds up an update.
 self.addEventListener('install', (e) => {
   e.waitUntil((async () => {
     await (await caches.open(CACHE)).addAll(self.PRECACHE);
-    await fillLibrary();
     await self.skipWaiting();
   })());
+});
+
+let filling = null;
+self.addEventListener('message', (e) => {
+  if (e.data === 'fill-library') e.waitUntil(filling ??= fillLibrary().finally(() => { filling = null; }));
 });
 
 self.addEventListener('activate', (e) => {

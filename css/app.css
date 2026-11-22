@@ -108,9 +108,14 @@ button { font: inherit; color: inherit; }
   grid-template-rows: repeat(var(--rows, 6), minmax(0, 1fr));
   gap: var(--gap);
   min-height: 0;
+  /* On wide screens keys stay at most 1.2 × as wide as tall; the board is centred. */
+  width: 100%;
+  max-width: calc((100dvh - var(--strip-h) - 4 * var(--gap)) / var(--rows, 7) * 1.2 * var(--cols, 10) + (var(--cols, 10) - 1) * var(--gap));
+  justify-self: center;
 }
 
 .key {
+  container-type: size;
   position: relative;
   min-width: 0;
   min-height: 0;
@@ -133,7 +138,8 @@ button { font: inherit; color: inherit; }
   object-fit: contain;
 }
 .key .label {
-  font-size: clamp(12px, 1.65vw, 20px);
+  /* Grows with the key: big keys get big words. */
+  font-size: max(clamp(12px, 1.65vw, 20px), min(16cqmin, 38px));
   font-weight: 700;
   line-height: 1.1;
   text-align: center;
@@ -166,9 +172,6 @@ button { font: inherit; color: inherit; }
   cursor: default;
 }
 
-/* Fewer, bigger keys get bigger labels. */
-.grid[data-size=small] .key .label { font-size: clamp(18px, 3.2vw, 36px); }
-.grid[data-size=medium] .key .label { font-size: clamp(15px, 2.4vw, 27px); }
 .grid[data-size=small] .key { padding: clamp(8px, 1.4vw, 18px) 8px clamp(4px, 0.8vw, 10px); }
 
 /* Word classes */
@@ -366,7 +369,7 @@ fieldset.field { border: 0; padding: 0; min-width: 0; }
 .results button[aria-pressed=true] { border-color: var(--fjell); outline: 3px solid var(--fjell); outline-offset: -1px; }
 
 /* Phrases are long: a smaller label leaves room for the picture. */
-.key.c-fras .label { font-size: clamp(11px, 1.35vw, 17px); }
+.key.c-fras .label { font-size: max(clamp(11px, 1.35vw, 17px), min(11cqmin, 28px)); }
 
 /* "Tilpass til skjermen": visible keys fill the screen, column by column. */
 .grid[data-fit] { grid-auto-flow: column; }
