@@ -90,12 +90,13 @@ async function findPictures(text) {
 // visible keys fill the screen. Keys keep their order column by column, so
 // jeg/vil stay on the left and the folders on the right. Grown-ups editing the
 // board always see the real fixed grid.
-function fitLayout(n) {
+// The right-hand column (the folders) always stays the right-hand column.
+function fitLayout(n, right) {
   const w = grid.clientWidth || innerWidth;
   const h = grid.clientHeight || innerHeight;
   let best = null;
-  for (let rows = 1; rows <= n; rows++) {
-    const cols = Math.ceil(n / rows);
+  for (let rows = Math.max(1, right); rows <= Math.max(n, right, 1); rows++) {
+    const cols = Math.ceil(n / rows) + (right ? 1 : 0);
     // Biggest key wins; keys may be a little wider than tall, not much taller than wide.
     const score = Math.min(w / cols, (h / rows) * 1.3);
     if (!best || score > best.score + 0.5) best = { rows, cols, score };
@@ -119,12 +120,17 @@ async function renderGrid() {
   const visible = cells.filter((c) => !c.empty && !c.hidden);
   const fit = state.settings.fit && !state.editing && visible.length && visible.length < cells.length;
   if (fit) {
-    // Column by column, as on the full board.
-    shown = cells.map((c, i) => ({ c, r: Math.floor(i / size.cols), col: i % size.cols }))
+    // Column by column, as on the full board; the right-hand column stays on the right.
+    const placed = cells.map((c, i) => ({ c, r: Math.floor(i / size.cols), col: i % size.cols }))
       .filter(({ c }) => !c.empty && !c.hidden)
-      .sort((a, b) => a.col - b.col || a.r - b.r)
-      .map(({ c }) => c);
-    ({ cols, rows } = fitLayout(shown.length));
+      .sort((a, b) => a.col - b.col || a.r - b.r);
+    const right = placed.filter((p) => p.col === size.cols - 1).map((p) => p.c);
+    const rest = placed.filter((p) => p.col !== size.cols - 1).map((p) => p.c);
+    ({ cols, rows } = fitLayout(rest.length, right.length));
+    // Fill the left part column by column, pad it, then the right-hand column.
+    const pad = (k) => Array.from({ length: k }, () => ({ key: '', empty: true }));
+    const leftSlots = (cols - (right.length ? 1 : 0)) * rows;
+    shown = [...rest, ...pad(leftSlots - rest.length), ...right, ...pad(right.length ? rows - right.length : 0)];
   }
   const n = cols * rows;
   grid.dataset.size = fit ? (n <= 12 ? 'small' : n <= 24 ? 'medium' : id) : id;
