@@ -1,5 +1,5 @@
 // Si det – main app.
-import { SIZES, STARTER, FORMS, DEFAULT_SIZE, baseCells, pagesOf } from './vocab.js';
+import { SIZES, FOLDERS, STARTER, FORMS, DEFAULT_SIZE, baseCells, pagesOf } from './vocab.js';
 import { SYMBOLS } from './symbols.js';
 import { kv, blobs, askToKeepData, exportBackup, importBackup } from './store.js';
 import * as speech from './speech.js';
@@ -520,8 +520,13 @@ $('#dlg-reveal').addEventListener('beforeopen', () => {
   $('#set-fit').checked = state.settings.fit;
 });
 $('#btn-reveal-starter').addEventListener('click', async () => {
-  // Folders count too: a folder with only hidden words is hidden as well.
-  for (const c of allCellsOfSize()) setHidden(c.key, !STARTER.has(c.label));
+  // Starter words and starter folders stay. Everything inside a starter folder
+  // (Mat og drikke, Leke, Fraser) stays too, so opening it never shows an empty page.
+  const openFolders = new Set(Object.entries(FOLDERS).filter(([, f]) => STARTER.has(f.label)).map(([id]) => id));
+  for (const c of allCellsOfSize()) {
+    const page = c.key.split(':')[1];
+    setHidden(c.key, !(STARTER.has(c.label) || openFolders.has(page)));
+  }
   await saveOverrides();
   state.page = 'core';
   renderGrid();
