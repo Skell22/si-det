@@ -18,30 +18,22 @@
 </head>
 <body>
   <main class="app" id="app">
-    <section class="bar" aria-label="Setningen">
-      <button class="bar-btn" id="btn-home" type="button" aria-label="Til forsiden">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9.5h13V10"/></svg>
-        <span>Hjem</span>
-      </button>
-      <div class="sentence" id="sentence" data-empty="Trykk på et bilde" role="status" aria-live="polite"></div>
-      <button class="bar-btn hold" id="btn-back" type="button" aria-label="Fjern siste ord. Hold inne for å tømme setningen">
-        <span class="fill" aria-hidden="true"></span>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5h11v14H9l-6-7z"/><path d="m12.5 9.5 5 5m0-5-5 5"/></svg>
-        <span>Slett</span>
-      </button>
-      <button class="bar-btn say" id="btn-say" type="button">Si det</button>
-      <button class="bar-btn hold" id="btn-grownup" type="button" aria-label="Voksen: hold inne i to sekunder">
+    <section class="grid" id="grid" aria-label="Ord"></section>
+
+    <footer class="strip">
+      <span class="who" id="who"><img id="who-photo" alt="" hidden><span id="who-name"></span></span>
+      <button class="grown hold" id="btn-grownup" type="button" aria-label="Voksen: hold inne i to sekunder">
         <span class="fill" aria-hidden="true"></span>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>
         <span>Voksen</span>
       </button>
-    </section>
-
-    <section class="grid" id="grid" aria-label="Ord"></section>
+    </footer>
   </main>
 
+  <div class="forms" id="forms" role="menu" aria-label="Andre former" hidden></div>
+
   <div class="edit-banner" id="edit-banner" hidden>
-    <span>Trykk på et ord for å endre det, eller på + for et nytt ord.</span>
+    <span id="edit-banner-text"></span>
     <button type="button" id="btn-edit-done">Ferdig</button>
   </div>
 
@@ -51,8 +43,10 @@
       <header><h2>For voksne</h2></header>
       <div class="body">
         <div class="menu">
+          <button class="btn" type="button" data-open="dlg-profiles">Barn: <span id="menu-child"></span><small>Bytt barn, legg til et barn, velg størrelse på tavla</small></button>
+          <button class="btn" type="button" data-open="dlg-reveal">Ordforråd<small>Vis bare startordene, eller vis flere ord etter hvert</small></button>
           <button class="btn" type="button" data-open="edit">Endre ord<small>Bytt bilde, ord eller stemme, legg til nye ord, skjul ord</small></button>
-          <button class="btn" type="button" data-open="dlg-settings">Innstillinger<small>Stemme, tempo og hvordan trykk virker</small></button>
+          <button class="btn" type="button" data-open="dlg-settings">Innstillinger<small>Stemme, lydstyrke og hvordan trykk virker</small></button>
           <button class="btn" type="button" data-open="dlg-backup">Sikkerhetskopi<small>Lagre alt på en fil, eller hent det tilbake</small></button>
           <button class="btn" type="button" data-open="dlg-help">Lås og installer<small>Legg Si det på Hjem-skjermen og lås barnet i appen</small></button>
           <button class="btn" type="button" data-open="dlg-about">Om Si det og lisenser</button>
@@ -77,7 +71,16 @@
           <label for="set-rate">Tempo: <span id="rate-out"></span></label>
           <input type="range" id="set-rate" min="0.6" max="1.2" step="0.05">
         </div>
-        <label class="check"><input type="checkbox" id="set-speak-tap"> Si ordet med en gang det trykkes</label>
+        <div class="field">
+          <label for="set-volume">Lydstyrke</label>
+          <select id="set-volume">
+            <option value="normal">Normal</option>
+            <option value="hoy">Høy</option>
+            <option value="maks">Ekstra høy</option>
+          </select>
+          <p class="hint">Gjelder Si det-stemmen og innspilte ord. Skru også opp lyden på iPaden med knappene på siden.</p>
+        </div>
+        <label class="check"><input type="checkbox" id="set-forms"> Hold inne et ord for å velge en annen form (spiser, spiste …)</label>
         <div class="field">
           <label for="set-lockout">Ignorer gjentatte trykk på samme ord</label>
           <select id="set-lockout">
@@ -94,6 +97,57 @@
     </div>
   </dialog>
 
+  <!-- Children (profiles) -->
+  <dialog id="dlg-profiles">
+    <div class="sheet">
+      <header><h2>Barn</h2></header>
+      <div class="body">
+        <p>Hvert barn har sin egen tavle: egne ord, bilder, opptak og størrelse. Trykk på et barn for å bytte.</p>
+        <div class="menu" id="profile-list"></div>
+        <button class="btn" type="button" id="btn-add-child">Legg til et barn</button>
+
+        <h3>Om <span id="pf-title"></span></h3>
+        <div class="preview-row">
+          <div class="preview c-pron" id="pf-preview"><img alt=""><span>jeg</span></div>
+          <div class="preview-actions">
+            <label class="btn" for="pf-photo">Bilde av barnet</label>
+            <input type="file" id="pf-photo" accept="image/*" hidden>
+            <button class="btn" type="button" id="pf-photo-del">Fjern bildet</button>
+          </div>
+        </div>
+        <p class="hint">Bildet vises på «jeg»-knappen.</p>
+        <div class="field">
+          <label for="pf-name">Navn</label>
+          <input type="text" id="pf-name" autocomplete="off">
+        </div>
+        <fieldset class="field">
+          <legend>Størrelse på tavla</legend>
+          <div class="sizes" id="pf-sizes"></div>
+          <p class="hint">Hver størrelse har sin egen faste plassering. Bytter dere størrelse, må barnet lære nye plasser, så gjør det sjelden. Endringer dere har gjort, beholdes for hver størrelse.</p>
+        </fieldset>
+        <button class="btn danger" type="button" id="btn-del-child">Slett dette barnet</button>
+      </div>
+      <footer><button class="btn primary" type="button" data-close>Ferdig</button></footer>
+    </div>
+  </dialog>
+
+  <!-- Vocabulary: reveal words step by step -->
+  <dialog id="dlg-reveal">
+    <div class="sheet">
+      <header><h2>Ordforråd</h2></header>
+      <div class="body">
+        <p>Ordene står alltid på samme plass. Skjulte ord blir en tom plass, og når de vises, dukker de opp der de hører hjemme. Da slipper barnet å lære plassene på nytt.</p>
+        <div class="menu">
+          <button class="btn" type="button" id="btn-reveal-starter">Vis bare startordene<small>jeg, vil, ha, mer, ferdig, hjelp, stopp, ja, nei, spise, drikke, leke, do</small></button>
+          <button class="btn" type="button" id="btn-reveal-choose">Velg selv<small>Trykk på ord på tavla for å vise eller skjule dem</small></button>
+          <button class="btn" type="button" id="btn-reveal-all">Vis alle ordene</button>
+        </div>
+        <p class="status" id="reveal-status"></p>
+      </div>
+      <footer><button class="btn primary" type="button" data-close>Lukk</button></footer>
+    </div>
+  </dialog>
+
   <!-- Backup -->
   <dialog id="dlg-backup">
     <div class="sheet">
@@ -101,10 +155,10 @@
       <div class="body">
         <p>Alt lagres bare på dette nettbrettet. Sletter du appen fra Hjem-skjermen, forsvinner ordene, bildene og opptakene. Ta en kopi ofte, og legg den i Filer eller iCloud.</p>
         <div class="menu">
-          <button class="btn" type="button" id="btn-export">Lagre sikkerhetskopi<small>Lager en fil med alle endringer, bilder og opptak</small></button>
+          <button class="btn" type="button" id="btn-export">Lagre sikkerhetskopi<small>Lager en fil med alle barna, endringer, bilder og opptak</small></button>
           <label class="btn" for="file-import">Hent fra sikkerhetskopi<small>Erstatter alt med innholdet i filen</small></label>
           <input type="file" id="file-import" accept="application/json,.json" hidden>
-          <button class="btn danger" type="button" id="btn-reset">Start på nytt<small>Fjerner alle endringer og går tilbake til startordene</small></button>
+          <button class="btn danger" type="button" id="btn-reset">Start på nytt<small>Fjerner alle barn, endringer, bilder og opptak</small></button>
         </div>
         <p class="status" id="backup-status"></p>
       </div>
@@ -123,7 +177,7 @@
         <p>Gå til Innstillinger → Tilgjengelighet → Guidet tilgang, slå det på og velg en kode barnet ikke kjenner.</p>
         <p>Åpne Si det og trykk tre ganger på sideknappen (eller Hjem-knappen). Trykk «Start». For å avslutte trykker du tre ganger igjen og skriver koden.</p>
         <h3>Knappen «Voksen»</h3>
-        <p>Hold inne «Voksen» i to sekunder for å åpne denne menyen. Et kort trykk gjør ingenting, så barnet kommer ikke inn ved et uhell.</p>
+        <p>Hold inne «Voksen» nederst til høyre i to sekunder for å åpne denne menyen. Et kort trykk gjør ingenting, så barnet kommer ikke inn ved et uhell.</p>
       </div>
       <footer><button class="btn primary" type="button" data-close>Lukk</button></footer>
     </div>
@@ -165,6 +219,11 @@
           <label for="edit-label">Ord på knappen</label>
           <input type="text" id="edit-label" autocomplete="off" autocapitalize="off" spellcheck="false" required>
         </div>
+        <div class="field" id="lib-field">
+          <span class="field-label">Bilde</span>
+          <p class="status" id="lib-status"></p>
+          <div class="results" id="lib-results"></div>
+        </div>
         <div class="field" id="edit-say-field">
           <label for="edit-say">Det stemmen sier (hvis annet enn ordet)</label>
           <input type="text" id="edit-say" autocomplete="off" placeholder="For eksempel «Jeg vil ha mer»">
@@ -176,7 +235,7 @@
         </fieldset>
 
         <div class="field">
-          <label for="edit-search">Finn symbol</label>
+          <label for="edit-search">Fant du ikke riktig bilde? Søk på nett</label>
           <div class="preview-row">
             <input type="search" id="edit-search" placeholder="Søk på norsk eller engelsk" class="grow">
             <button class="btn" type="button" id="btn-search">Søk</button>

@@ -13,7 +13,13 @@ const synth = window.speechSynthesis;
 const NORWEGIAN = /^(nb|no|nn)([-_]|$)/i;
 const GAP_S = 0.05; // pause between words in a sentence
 
+// Volume levels (Voksen → Innstillinger → Lydstyrke). Above 1 the sound goes
+// through a limiter, so it gets louder without crackling.
+export const VOLUMES = { normal: 1, hoy: 2.2, maks: 3.5 };
+export const DEFAULT_VOLUME = 'hoy';
+
 let ctx = null;
+let master = null; // gain -> limiter -> speakers
 let unlocked = false;
 let sources = [];
 let token = 0; // bumps on stop(), so an old sentence stops cleanly
@@ -46,6 +52,11 @@ export function unlock() {
     const b = ctx.createBuffer(1, 1, 22050);
     const s = ctx.createBufferSource();
     s.buffer = b; s.connect(ctx.destination); s.start(0);
+    const limiter = ctx.createDynamicsCompressor();
+    limiter.threshold.value = -10; limiter.knee.value = 4; limiter.ratio.value = 20;
+    limiter.attack.value = 0.002; limiter.release.value = 0.12;
+    master = ctx.createGain();
+    master.connect(limiter); limiter.connect(ctx.destination);
     preloadClips();
   }
   if (synth) {
@@ -78,17 +89,20 @@ function preloadClips() {
 
 export function stop() {
   token++;
+  waiting.length = 0;
+  busy = false;
   synth?.cancel();
   sources.forEach((s) => { try { s.stop(); } catch { /* already stopped */ } });
   sources = [];
 }
 
-function playBuffer(buf) {
+function playBuffer(buf, settings) {
   return new Promise((resolve) => {
     if (ctx.state === 'suspended') ctx.resume();
     const s = ctx.createBufferSource();
     s.buffer = buf;
-    s.connect(ctx.destination);
+    master.gain.value = VOLUMES[settings.volume] ?? VOLUMES[DEFAULT_VOLUME];
+    s.connect(master);
     s.onended = () => { sources = sources.filter((x) => x !== s); resolve(); };
     sources.push(s);
     s.start();
@@ -103,6 +117,7 @@ function sayText(text, settings) {
     if (v) u.voice = v;
     u.lang = v?.lang || 'nb-NO';
     u.rate = settings.rate ?? 0.9;
+    u.volume = 1; // the device voice can't go above its maximum
     u.onend = u.onerror = () => resolve();
     synth.speak(u);
   });
@@ -110,34 +125,48 @@ function sayText(text, settings) {
 
 const wait = (s) => new Promise((r) => setTimeout(r, s * 1000));
 
-// parts: [{ text, audio: Blob|null }]
-export async function speak(parts, settings, onPart) {
+function canPlayPart(p, settings) {
+  const useOwn = settings.voiceURI === OWN_VOICE || !settings.voiceURI;
+  return !!ctx && (!!p.audio || (useOwn && hasClip(p.text)));
+}
+
+async function speakPart(p, settings) {
+  try {
+    if (p.audio && ctx) return await playBuffer(await blobBuffer(p.audio), settings);
+    if (canPlayPart(p, settings)) return await playBuffer(await clipBuffer(CLIPS[p.text]), settings);
+  } catch { /* fall back to the device voice */ }
+  return sayText(p.text, settings);
+}
+
+// One tap = one word, said at once. Taps that come while a word is still being
+// said wait their turn, so "jeg" "vil" "spise" come out in a row and never
+// cut each other off. Only the last few taps are kept, so it never lags far behind.
+const MAX_WAITING = 3;
+const waiting = [];
+let busy = false;
+
+export function say(part, settings) {
+  if (waiting.length >= MAX_WAITING) waiting.shift();
+  waiting.push(part);
+  if (busy) return;
+  busy = true;
+  const my = token;
+  (async () => {
+    while (waiting.length && my === token) {
+      await speakPart(waiting.shift(), settings);
+      if (waiting.length) await wait(GAP_S);
+    }
+    if (my === token) busy = false; // after stop() a newer loop owns busy
+  })();
+}
+
+// Several parts in one go (the test button). parts: [{ text, audio: Blob|null }]
+export async function speak(parts, settings) {
   stop();
   const my = token;
-  const useOwn = settings.voiceURI === OWN_VOICE || !settings.voiceURI;
-  const canPlay = !!ctx;
-  const playable = (p) => canPlay && (p.audio || (useOwn && hasClip(p.text)));
-
-  // Device voice only: one utterance sounds more natural than word by word.
-  if (!parts.some(playable)) {
-    onPart?.(-1);
-    await sayText(parts.map((p) => p.text).join(' '), settings);
-    onPart?.(null);
-    return;
-  }
-
-  for (let i = 0; i < parts.length; i++) {
-    if (my !== token) return;
-    const p = parts[i];
-    onPart?.(i);
-    try {
-      if (p.audio && canPlay) await playBuffer(await blobBuffer(p.audio));
-      else if (useOwn && canPlay && hasClip(p.text)) await playBuffer(await clipBuffer(CLIPS[p.text]));
-      else await sayText(p.text, settings);
-    } catch {
-      await sayText(p.text, settings);
-    }
+  if (!parts.some((p) => canPlayPart(p, settings))) return sayText(parts.map((p) => p.text).join(' '), settings);
+  for (let i = 0; i < parts.length && my === token; i++) {
+    await speakPart(parts[i], settings);
     if (i < parts.length - 1) await wait(GAP_S);
   }
-  if (my === token) onPart?.(null);
 }

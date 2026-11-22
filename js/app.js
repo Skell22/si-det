@@ -1,61 +1,51 @@
 // Si det – main app.
-import { COLS, ROWS, FIXED_LEFT, FOLDERS, CORE, FOLDER_WORDS } from './vocab.js';
+import { SIZES, STARTER, FORMS, DEFAULT_SIZE, baseCells, pagesOf } from './vocab.js';
 import { SYMBOLS } from './symbols.js';
 import { kv, blobs, askToKeepData, exportBackup, importBackup } from './store.js';
 import * as speech from './speech.js';
 
-export const VERSION = '0.2.0';
+export const VERSION = '0.3.0';
 
 const CLASSES = [
   ['pron', 'Pronomen'], ['verb', 'Verb'], ['desc', 'Beskrivende'], ['noun', 'Ting og folk'],
   ['prep', 'Sted'], ['soc', 'Sosialt'], ['ques', 'Spørsmål'], ['adv', 'Adverb'], ['neg', 'Nei og stopp'],
+  ['fras', 'Frase'],
 ];
-const DEFAULTS = { voiceURI: speech.OWN_VOICE, rate: 0.9, speakOnTap: true, lockoutMs: 600 };
-const HOLD_MS = 2000;
+const DEFAULTS = { voiceURI: speech.OWN_VOICE, rate: 0.9, volume: speech.DEFAULT_VOLUME, forms: true, lockoutMs: 600 };
+const HOLD_MS = 2000; // grown-up button
+const FORM_HOLD_MS = 550; // hold a word to see its other forms
 
 const $ = (sel) => document.querySelector(sel);
 const grid = $('#grid');
-const sentenceEl = $('#sentence');
+const formsEl = $('#forms');
 
 const state = {
+  profiles: [], // [{ id, name, size, photo }]
+  pid: null,
   page: 'core',
-  editing: false,
+  editing: false, // false | 'edit' | 'reveal'
   settings: { ...DEFAULTS },
-  overrides: {},
-  sentence: [],
+  overrides: {}, // cell key -> changes made by a grown-up
+  cells: [],
   lastTap: new Map(),
   urls: new Map(), // blob key -> object URL
 };
+
+const profile = () => state.profiles.find((p) => p.id === state.pid);
+const sizeId = () => (SIZES[profile()?.size] ? profile().size : DEFAULT_SIZE);
+const pk = (name, id = state.pid) => `p:${id}:${name}`;
 
 // ---------- Vocabulary model ----------
 
 const word = ([label, cls, en]) => ({ label, cls, sym: SYMBOLS[`${label}|${en}`] ?? null });
 
-function baseCell(page, r, c) {
-  if (c < 2) return { key: `fixed:${r}:${c}`, ...word(FIXED_LEFT[r][c]) };
-  if (c === COLS - 1) {
-    const f = FOLDERS[r];
-    return { key: `folders:${r}`, label: f.label, cls: 'noun', folder: f.id, sym: SYMBOLS[`${f.label}|${f.en}`] ?? null };
-  }
-  const key = `${page}:${r}:${c}`;
-  const src = page === 'core' ? CORE[r]?.[c - 2] : FOLDER_WORDS[page]?.[r * 7 + (c - 2)];
-  return src ? { key, ...word(src) } : { key, empty: true };
-}
-
-function cellAt(page, r, c) {
-  const base = baseCell(page, r, c);
+function cellFrom(base) {
+  let cell = base.word ? { key: base.key, folder: base.folder, ...word(base.word) } : { key: base.key, empty: true };
   const ov = state.overrides[base.key];
-  if (!ov) return base;
-  if (ov.removed) return { key: base.key, empty: true, folder: base.folder };
-  return { ...base, ...ov, empty: false };
-}
-
-function cellByKey(key) {
-  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
-    const cell = cellAt(state.page, r, c);
-    if (cell.key === key) return cell;
-  }
-  return null;
+  if (ov) cell = ov.removed ? { key: base.key, empty: true } : { ...cell, ...ov, empty: false };
+  // The child's own photo on "jeg", unless a grown-up chose another picture.
+  if (!cell.empty && cell.label === 'jeg' && !cell.img && profile()?.photo) cell = { ...cell, img: profile().photo };
+  return cell;
 }
 
 async function imgSrc(cell) {
@@ -66,17 +56,51 @@ async function imgSrc(cell) {
     }
     return state.urls.get(cell.img) || '';
   }
+  if (cell.lib) return `library/${cell.lib}.png`;
   return cell.sym ? `symbols/${cell.sym}.png` : '';
+}
+
+// ---------- Picture library: type a word, get its picture ----------
+
+let LIB = null;
+const library = async () => (LIB ??= (await import('./library.js')).LIBRARY);
+const ENDINGS = ['ene', 'en', 'et', 'er', 'a', 'e', 'r']; // katten → katt, hundene → hund
+
+// Pictures for a word, best first: the hand-picked board pictures, then the library.
+async function findPictures(text) {
+  const w = text.trim().toLowerCase();
+  if (!w) return [];
+  const lib = await library();
+  const out = [];
+  const push = (p) => { if (out.length < 12 && !out.some((o) => o.sym === p.sym && o.lib === p.lib)) out.push(p); };
+  const fromLib = (word) => (lib[word] || []).forEach((id) => push({ lib: id }));
+  for (const [k, id] of Object.entries(SYMBOLS)) if (k.slice(0, k.indexOf('|')).toLowerCase() === w) push({ sym: id });
+  fromLib(w);
+  if (!out.length) for (const end of ENDINGS) if (w.endsWith(end) && lib[w.slice(0, -end.length)]) { fromLib(w.slice(0, -end.length)); break; }
+  // A phrase ("jeg vil ha katt"): use the last word that has a picture.
+  if (!out.length && w.includes(' ')) for (const part of w.split(/\s+/).reverse()) if (lib[part]) { fromLib(part); break; }
+  // Still nothing: words that start with what was typed (at least 3 letters).
+  if (!out.length && w.length >= 3) for (const [k, ids] of Object.entries(lib)) if (k.startsWith(w)) ids.slice(0, 2).forEach((id) => push({ lib: id }));
+  return out;
 }
 
 // ---------- Rendering ----------
 
+// Only the newest render may draw: a tap during a slow render must not be undone.
+let renderToken = 0;
 async function renderGrid() {
-  grid.style.setProperty('--cols', COLS);
-  grid.style.setProperty('--rows', ROWS);
+  const my = ++renderToken;
+  const id = sizeId();
+  const size = SIZES[id];
+  if (!size.pages[state.page]) state.page = 'core';
+  const page = state.page;
+  grid.dataset.size = id;
+  grid.style.setProperty('--cols', size.cols);
+  grid.style.setProperty('--rows', size.rows);
+  const cells = baseCells(id, page).map(cellFrom);
+  state.cells = cells;
   const frag = document.createDocumentFragment();
-  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
-    const cell = cellAt(state.page, r, c);
+  for (const cell of cells) {
     const el = document.createElement('button');
     el.type = 'button';
     el.className = 'key';
@@ -85,13 +109,14 @@ async function renderGrid() {
     if (cell.empty || hiddenForChild) {
       el.classList.add('empty');
       el.setAttribute('aria-hidden', 'true');
-      el.tabIndex = state.editing && cell.empty ? 0 : -1;
-      if (state.editing && cell.empty) el.setAttribute('aria-label', 'Legg til ord');
+      const addable = state.editing === 'edit' && cell.empty;
+      el.tabIndex = addable ? 0 : -1;
+      if (addable) { el.removeAttribute('aria-hidden'); el.setAttribute('aria-label', 'Legg til ord'); }
     } else {
       el.classList.add(`c-${cell.cls || 'noun'}`);
       if (cell.folder) {
         el.classList.add('folder');
-        if (cell.folder === state.page) { el.classList.add('open'); el.setAttribute('aria-current', 'page'); }
+        if (cell.folder === page) { el.classList.add('open'); el.setAttribute('aria-current', 'page'); }
       }
       if (cell.hidden) el.classList.add('is-hidden');
       const img = document.createElement('img');
@@ -105,47 +130,33 @@ async function renderGrid() {
     }
     frag.append(el);
   }
-  grid.replaceChildren(frag);
+  if (my === renderToken) grid.replaceChildren(frag);
 }
 
-async function renderSentence() {
-  const frag = document.createDocumentFragment();
-  for (const w of state.sentence) {
-    const chip = document.createElement('div');
-    chip.className = `chip c-${w.cls || 'noun'}`;
-    const img = document.createElement('img');
-    img.alt = '';
-    img.src = await imgSrc(w);
-    const t = document.createElement('span');
-    t.textContent = w.label;
-    chip.append(img, t);
-    frag.append(chip);
-  }
-  sentenceEl.replaceChildren(frag);
-  sentenceEl.scrollLeft = sentenceEl.scrollWidth;
+async function renderWho() {
+  const p = profile();
+  $('#who-name').textContent = p.name;
+  $('#menu-child').textContent = p.name;
+  const img = $('#who-photo');
+  img.hidden = !p.photo;
+  if (p.photo) img.src = await imgSrc({ img: p.photo });
 }
 
 // ---------- Speaking ----------
 
-async function partFor(w) {
-  return { text: w.say || w.label, audio: w.audio ? await blobs.get(w.audio) : null };
-}
-
-async function speakWords(words) {
-  const parts = await Promise.all(words.map(partFor));
-  const chips = [...sentenceEl.children];
-  await speech.speak(parts, state.settings, (i) => {
-    chips.forEach((ch, j) => ch.classList.toggle('speaking', i === -1 ? words === state.sentence : j === i && words === state.sentence));
-  });
-  chips.forEach((ch) => ch.classList.remove('speaking'));
+async function partFor(cell) {
+  return { text: cell.say || cell.label, audio: cell.audio ? await blobs.get(cell.audio) : null };
 }
 
 // ---------- Tapping ----------
 
-function activate(key) {
+const cellByKey = (key) => state.cells.find((c) => c.key === key) || null;
+
+async function activate(key) {
   const cell = cellByKey(key);
   if (!cell) return;
-  if (state.editing) return openEditor(cell);
+  if (state.editing === 'edit') return openEditor(cell);
+  if (state.editing === 'reveal') return cell.empty ? undefined : toggleHidden(cell);
   if (cell.empty || cell.hidden) return;
 
   const now = performance.now();
@@ -156,24 +167,35 @@ function activate(key) {
   if (cell.folder) {
     state.page = state.page === cell.folder ? 'core' : cell.folder;
     renderGrid();
-    if (state.settings.speakOnTap) speakWords([cell]);
-    return;
   }
-  state.sentence.push({ label: cell.label, cls: cell.cls, sym: cell.sym, img: cell.img, say: cell.say, audio: cell.audio });
-  renderSentence();
-  if (state.settings.speakOnTap) speakWords([cell]);
+  // Every tap is said straight away. Nothing is collected in a sentence.
+  speech.say(await partFor(cell), state.settings);
 }
 
+const formsOf = (cell) => (!cell || cell.empty || cell.folder || cell.say ? null : FORMS[cell.label] || null);
+
 // Select on release: a key fires when the finger lifts while still on it.
+// Holding a word with other forms (spise → spiser, spiste) opens a small menu.
 let pressed = null;
+let formTimer = null;
 grid.addEventListener('pointerdown', (e) => {
   speech.unlock();
   const el = e.target.closest('.key');
-  if (!el || (el.classList.contains('empty') && !state.editing)) return;
+  if (!el || (el.classList.contains('empty') && state.editing !== 'edit')) return;
   pressed = el;
   el.classList.add('pressed');
+  const cell = cellByKey(el.dataset.key);
+  if (!state.editing && state.settings.forms && formsOf(cell) && !cell.hidden) {
+    formTimer = setTimeout(() => {
+      formTimer = null;
+      el.classList.remove('pressed');
+      pressed = null;
+      showForms(el, cell);
+    }, FORM_HOLD_MS);
+  }
 });
 window.addEventListener('pointerup', (e) => {
+  clearTimeout(formTimer); formTimer = null;
   if (!pressed) return;
   const el = pressed;
   pressed = null;
@@ -181,27 +203,54 @@ window.addEventListener('pointerup', (e) => {
   const under = document.elementFromPoint(e.clientX, e.clientY)?.closest('.key');
   if (under === el) activate(el.dataset.key);
 });
-window.addEventListener('pointercancel', () => { pressed?.classList.remove('pressed'); pressed = null; });
+window.addEventListener('pointercancel', () => {
+  clearTimeout(formTimer); formTimer = null;
+  pressed?.classList.remove('pressed'); pressed = null;
+});
 // Keyboard and switch access (Enter/Space on a focused key).
 grid.addEventListener('keydown', (e) => {
   if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.key')) { e.preventDefault(); activate(e.target.dataset.key); }
 });
 grid.addEventListener('contextmenu', (e) => e.preventDefault());
 
-function pressable(btn, fn) {
-  btn.addEventListener('pointerdown', () => { speech.unlock(); btn.classList.add('pressed'); });
-  const up = () => btn.classList.remove('pressed');
-  btn.addEventListener('pointerup', up);
-  btn.addEventListener('pointerleave', up);
-  btn.addEventListener('click', fn);
-}
+// ---------- Word forms ----------
 
-pressable($('#btn-home'), () => { state.page = 'core'; renderGrid(); });
-pressable($('#btn-back'), () => { state.sentence.pop(); renderSentence(); });
-pressable($('#btn-say'), () => { if (state.sentence.length) speakWords(state.sentence); });
-// Tap the sentence to say it too; hold "Slett" to clear everything.
-sentenceEl.addEventListener('click', () => { if (state.sentence.length) speakWords(state.sentence); });
-holdToFire($('#btn-back'), 800, () => { state.sentence = []; renderSentence(); });
+function showForms(keyEl, cell) {
+  formsEl.replaceChildren(...[cell.label, ...formsOf(cell)].map((f, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `form c-${cell.cls || 'noun'}${i === 0 ? ' base' : ''}`;
+    b.setAttribute('role', 'menuitem');
+    b.textContent = f;
+    b.dataset.say = i === 0 ? (cell.say || cell.label) : f;
+    return b;
+  }));
+  formsEl.hidden = false;
+  const k = keyEl.getBoundingClientRect();
+  const f = formsEl.getBoundingClientRect();
+  const left = Math.min(Math.max(8, k.left + k.width / 2 - f.width / 2), innerWidth - f.width - 8);
+  const top = k.top - f.height - 8 > 8 ? k.top - f.height - 8 : Math.min(k.bottom + 8, innerHeight - f.height - 8);
+  formsEl.style.setProperty('--x', `${left}px`);
+  formsEl.style.setProperty('--y', `${top}px`);
+}
+const hideForms = () => { formsEl.hidden = true; formsEl.replaceChildren(); };
+
+formsEl.addEventListener('click', (e) => {
+  const b = e.target.closest('.form');
+  if (!b) return;
+  speech.unlock();
+  // The base word keeps its own recording; the other forms use the voice.
+  const cell = b.classList.contains('base') ? state.cells.find((c) => c.label === b.textContent) : null;
+  hideForms();
+  if (cell?.audio) partFor(cell).then((p) => speech.say(p, state.settings));
+  else speech.say({ text: b.dataset.say, audio: null }, state.settings);
+});
+// A tap outside the forms menu only closes it.
+window.addEventListener('pointerdown', (e) => {
+  if (formsEl.hidden || formsEl.contains(e.target)) return;
+  hideForms();
+  e.stopPropagation();
+}, true);
 
 // ---------- Hold to open grown-up menu ----------
 
@@ -210,7 +259,7 @@ function holdToFire(btn, ms, fn) {
   btn.style.setProperty('--hold-ms', `${ms}ms`);
   const start = () => {
     btn.classList.add('holding');
-    timer = setTimeout(() => { timer = null; btn.classList.remove('holding'); btn.dataset.fired = '1'; fn(); }, ms);
+    timer = setTimeout(() => { timer = null; btn.classList.remove('holding'); fn(); }, ms);
   };
   const cancel = () => { if (timer) clearTimeout(timer); timer = null; btn.classList.remove('holding'); };
   btn.addEventListener('pointerdown', start);
@@ -238,21 +287,30 @@ document.addEventListener('click', (e) => {
   const open = e.target.closest('[data-open]');
   if (open) {
     const target = open.dataset.open;
-    if (target === 'edit') { open.closest('dialog').close(); setEditing(true); } else openDialog(target);
+    if (target === 'edit') { open.closest('dialog').close(); setEditing('edit'); } else openDialog(target);
   }
 });
 
-function setEditing(on) {
-  state.editing = on;
-  document.body.classList.toggle('editing', on);
-  $('#edit-banner').hidden = !on;
+const BANNER = {
+  edit: 'Trykk på et ord for å endre det, eller på + for et nytt ord.',
+  reveal: 'Trykk på ord for å vise eller skjule dem for barnet.',
+};
+function setEditing(mode) {
+  state.editing = mode;
+  document.body.classList.toggle('editing', !!mode);
+  document.body.classList.toggle('revealing', mode === 'reveal');
+  $('#edit-banner').hidden = !mode;
+  $('#edit-banner-text').textContent = BANNER[mode] || '';
+  hideForms();
   renderGrid();
 }
 $('#btn-edit-done').addEventListener('click', () => setEditing(false));
 
-// ---------- Settings ----------
+// ---------- Settings (per child) ----------
 
-async function saveSettings() { await kv.set('settings', state.settings); }
+const saveSettings = () => kv.set(pk('settings'), state.settings);
+const saveOverrides = () => kv.set(pk('overrides'), state.overrides);
+const saveProfiles = () => kv.set('profiles', state.profiles);
 
 function fillVoices() {
   const sel = $('#set-voice');
@@ -275,8 +333,9 @@ $('#dlg-settings').addEventListener('beforeopen', () => {
   fillVoices();
   $('#set-rate').value = state.settings.rate;
   $('#rate-out').textContent = Number(state.settings.rate).toFixed(2).replace('.', ',');
-  $('#set-speak-tap').checked = state.settings.speakOnTap;
+  $('#set-forms').checked = state.settings.forms;
   $('#set-lockout').value = String(state.settings.lockoutMs);
+  $('#set-volume').value = state.settings.volume;
 });
 $('#set-voice').addEventListener('change', (e) => { state.settings.voiceURI = e.target.value; saveSettings(); fillVoices(); });
 $('#set-rate').addEventListener('input', (e) => {
@@ -284,12 +343,164 @@ $('#set-rate').addEventListener('input', (e) => {
   $('#rate-out').textContent = state.settings.rate.toFixed(2).replace('.', ',');
   saveSettings();
 });
-$('#set-speak-tap').addEventListener('change', (e) => { state.settings.speakOnTap = e.target.checked; saveSettings(); });
+$('#set-volume').addEventListener('change', (e) => {
+  state.settings.volume = e.target.value;
+  saveSettings();
+  speech.unlock();
+  speech.speak([{ text: 'hei' }], state.settings);
+});
+$('#set-forms').addEventListener('change', (e) => { state.settings.forms = e.target.checked; saveSettings(); });
 $('#set-lockout').addEventListener('change', (e) => { state.settings.lockoutMs = Number(e.target.value); saveSettings(); });
 $('#btn-test-voice').addEventListener('click', () => {
   speech.unlock();
   speech.speak(['hei', 'jeg', 'vil', 'leke'].map((text) => ({ text })), state.settings);
 });
+
+// ---------- Children (profiles) ----------
+
+$('#pf-sizes').replaceChildren(...Object.entries(SIZES).map(([id, s]) => {
+  const l = document.createElement('label');
+  l.className = 'size';
+  l.innerHTML = `<input type="radio" name="pf-size" value="${id}"><span><b>${s.name}</b> ${s.cols} × ${s.rows}<small>${s.hint}</small></span>`;
+  return l;
+}));
+
+async function renderProfiles() {
+  const p = profile();
+  $('#profile-list').replaceChildren(...state.profiles.map((q) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'btn';
+    b.dataset.pid = q.id;
+    b.innerHTML = `<span></span><small>${SIZES[q.size]?.name || ''}${q.id === p.id ? ' · valgt nå' : ''}</small>`;
+    b.firstChild.textContent = q.name;
+    if (q.id === p.id) b.setAttribute('aria-current', 'true');
+    return b;
+  }));
+  $('#pf-title').textContent = p.name;
+  $('#pf-name').value = p.name;
+  document.querySelectorAll('input[name=pf-size]').forEach((r) => { r.checked = r.value === sizeId(); });
+  const img = $('#pf-preview img');
+  img.src = p.photo ? await imgSrc({ img: p.photo }) : `symbols/${SYMBOLS['jeg|I']}.png`;
+  $('#pf-photo-del').disabled = !p.photo;
+  $('#btn-del-child').disabled = state.profiles.length < 2;
+}
+$('#dlg-profiles').addEventListener('beforeopen', renderProfiles);
+
+$('#profile-list').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-pid]');
+  if (!b || b.dataset.pid === state.pid) return;
+  state.pid = b.dataset.pid;
+  await openProfile();
+  renderProfiles();
+});
+$('#pf-name').addEventListener('input', (e) => {
+  profile().name = e.target.value.trim() || 'Barn';
+  $('#pf-title').textContent = profile().name;
+  saveProfiles();
+  renderWho();
+});
+$('#pf-name').addEventListener('change', renderProfiles);
+$('#pf-sizes').addEventListener('change', async (e) => {
+  profile().size = e.target.value;
+  state.page = 'core';
+  await saveProfiles();
+  renderGrid();
+  renderProfiles();
+});
+$('#pf-photo').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const p = profile();
+  const key = `photo:${p.id}:${Date.now()}`;
+  await blobs.set(key, await shrinkImage(file, 400));
+  if (p.photo) await dropBlob(p.photo);
+  p.photo = key;
+  await saveProfiles();
+  e.target.value = '';
+  renderProfiles(); renderWho(); renderGrid();
+});
+$('#pf-photo-del').addEventListener('click', async () => {
+  const p = profile();
+  if (!p.photo) return;
+  await dropBlob(p.photo);
+  p.photo = null;
+  await saveProfiles();
+  renderProfiles(); renderWho(); renderGrid();
+});
+$('#btn-add-child').addEventListener('click', async () => {
+  const p = { id: `p${Date.now().toString(36)}`, name: `Barn ${state.profiles.length + 1}`, size: DEFAULT_SIZE, photo: null };
+  state.profiles.push(p);
+  await saveProfiles();
+  state.pid = p.id;
+  await openProfile();
+  await renderProfiles();
+  $('#pf-name').focus();
+  $('#pf-name').select();
+});
+$('#btn-del-child').addEventListener('click', async () => {
+  const p = profile();
+  if (state.profiles.length < 2) return;
+  if (!confirm(`Slette ${p.name}? Ordene, bildene og opptakene til ${p.name} blir borte. Dette kan ikke angres.`)) return;
+  for (const ov of Object.values(state.overrides)) { if (ov.img) await dropBlob(ov.img); if (ov.audio) await dropBlob(ov.audio); }
+  if (p.photo) await dropBlob(p.photo);
+  await kv.del(pk('settings'));
+  await kv.del(pk('overrides'));
+  state.profiles = state.profiles.filter((q) => q.id !== p.id);
+  await saveProfiles();
+  state.pid = state.profiles[0].id;
+  await openProfile();
+  renderProfiles();
+});
+
+async function dropBlob(key) {
+  await blobs.del(key);
+  if (state.urls.has(key)) { URL.revokeObjectURL(state.urls.get(key)); state.urls.delete(key); }
+}
+
+// ---------- Vocabulary: reveal step by step ----------
+
+// Every word cell of the current size, on every page.
+function allCellsOfSize() {
+  const id = sizeId();
+  const seen = new Map();
+  for (const page of pagesOf(id)) for (const b of baseCells(id, page)) if (!seen.has(b.key)) seen.set(b.key, cellFrom(b));
+  return [...seen.values()].filter((c) => !c.empty);
+}
+
+function setHidden(key, hidden) {
+  const ov = { ...(state.overrides[key] || {}) };
+  if (hidden) ov.hidden = true; else delete ov.hidden;
+  if (Object.keys(ov).length) state.overrides[key] = ov; else delete state.overrides[key];
+}
+
+async function toggleHidden(cell) {
+  setHidden(cell.key, !cell.hidden);
+  await saveOverrides();
+  renderGrid();
+}
+
+const revealStatus = $('#reveal-status');
+$('#dlg-reveal').addEventListener('beforeopen', () => {
+  const cells = allCellsOfSize();
+  const shown = cells.filter((c) => !c.hidden).length;
+  revealStatus.textContent = `${profile().name} ser ${shown} av ${cells.length} ord og mapper.`;
+});
+$('#btn-reveal-starter').addEventListener('click', async () => {
+  // Folders count too: a folder with only hidden words is hidden as well.
+  for (const c of allCellsOfSize()) setHidden(c.key, !STARTER.has(c.label));
+  await saveOverrides();
+  state.page = 'core';
+  renderGrid();
+  revealStatus.textContent = 'Nå vises bare startordene. Vis flere med «Velg selv».';
+});
+$('#btn-reveal-all').addEventListener('click', async () => {
+  for (const c of allCellsOfSize()) setHidden(c.key, false);
+  await saveOverrides();
+  renderGrid();
+  revealStatus.textContent = 'Nå vises alle ordene.';
+});
+$('#btn-reveal-choose').addEventListener('click', () => { $('#dlg-reveal').close(); setEditing('reveal'); });
 
 // ---------- Backup ----------
 
@@ -316,9 +527,8 @@ $('#file-import').addEventListener('change', async (e) => {
   e.target.value = '';
 });
 $('#btn-reset').addEventListener('click', async () => {
-  if (!confirm('Fjerne alle endringer, bilder og opptak? Dette kan ikke angres.')) return;
-  await kv.set('overrides', {});
-  await kv.set('settings', { ...DEFAULTS });
+  if (!confirm('Fjerne alle barn, endringer, bilder og opptak? Dette kan ikke angres.')) return;
+  await kv.clear();
   await blobs.clear();
   await load();
   backupStatus.textContent = 'Startordene er tilbake.';
@@ -333,6 +543,9 @@ const ed = {
   newAudio: null, // Blob
   dropAudio: false,
   recorder: null,
+  pic: null, // { sym } or { lib }: a picture from the board or the library
+  picManual: false, // a grown-up chose the picture, so typing doesn't change it
+  lookup: 0,
 };
 const dlgEdit = $('#dlg-edit');
 
@@ -376,18 +589,67 @@ function openEditor(cell) {
   $('#edit-search').value = ed.draft.label || '';
   $('#search-results').replaceChildren();
   $('#search-status').textContent = '';
+  ed.pic = null; ed.picManual = false;
   updatePreview();
   updateRecButtons();
+  lookUp();
   dlgEdit.showModal();
 }
 
-$('#edit-label').addEventListener('input', updatePreview);
+// Look the typed word up in the picture library. For a new word, or when the word
+// is changed, the best picture is chosen straight away; the others are one tap away.
+async function lookUp() {
+  const my = ++ed.lookup;
+  const label = $('#edit-label').value.trim();
+  const pics = await findPictures(label);
+  if (my !== ed.lookup) return;
+  const auto = !ed.picManual && !ed.newImg && (ed.cell.empty || label.toLowerCase() !== (ed.cell.label || '').toLowerCase());
+  if (auto && pics.length) choosePicture(pics[0], false);
+  const status = $('#lib-status');
+  if (!label) status.textContent = 'Skriv ordet, så finner Si det et bilde.';
+  else if (!pics.length) status.textContent = `Fant ikke «${label}» i bildebiblioteket. Søk på nett nedenfor, eller bruk eget bilde.`;
+  else status.textContent = auto ? 'Bildet ble valgt automatisk. Trykk på et annet hvis du vil.' : 'Trykk på et bilde for å bruke det.';
+  $('#lib-results').replaceChildren(...pics.map((p) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.dataset.pic = JSON.stringify(p);
+    b.setAttribute('aria-label', 'Bruk dette bildet');
+    b.setAttribute('aria-pressed', String(!!ed.pic && ed.pic.sym === p.sym && ed.pic.lib === p.lib));
+    const img = document.createElement('img');
+    img.alt = '';
+    img.src = p.lib ? `library/${p.lib}.png` : `symbols/${p.sym}.png`;
+    b.append(img);
+    return b;
+  }));
+}
+
+function choosePicture(p, manual) {
+  ed.pic = p;
+  ed.newImg = null;
+  ed.picManual ||= manual;
+  ed.draft = { ...ed.draft, sym: p.sym ?? null, lib: p.lib, img: undefined };
+  updatePreview();
+  $('#lib-results').querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.pic === JSON.stringify(p))));
+}
+
+$('#lib-results').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (b) choosePicture(JSON.parse(b.dataset.pic), true);
+});
+
+let lookTimer = null;
+$('#edit-label').addEventListener('input', () => {
+  updatePreview();
+  clearTimeout(lookTimer);
+  lookTimer = setTimeout(lookUp, 250);
+});
 $('#edit-classes').addEventListener('change', (e) => { ed.draft.cls = e.target.value; updatePreview(); });
 
 $('#edit-photo').addEventListener('change', async (e) => {
   const file = e.target.files[0];
   if (!file) return;
   ed.newImg = await shrinkImage(file, 400);
+  ed.picManual = true;
   updatePreview();
   e.target.value = '';
 });
@@ -438,6 +700,7 @@ $('#search-results').addEventListener('click', async (e) => {
   try {
     const res = await fetch(`https://static.arasaac.org/pictograms/${b.dataset.id}/${b.dataset.id}_300.png`);
     ed.newImg = await res.blob();
+    ed.picManual = true;
     status.textContent = 'Symbolet er valgt.';
     updatePreview();
   } catch {
@@ -484,7 +747,7 @@ $('#btn-rec-del').addEventListener('click', () => { ed.newAudio = null; ed.dropA
 $('#btn-remove').addEventListener('click', async () => {
   if (!confirm(`Fjerne «${ed.cell.label}»? Plassen blir tom.`)) return;
   state.overrides[ed.cell.key] = { removed: true };
-  await kv.set('overrides', state.overrides);
+  await saveOverrides();
   dlgEdit.close();
   renderGrid();
 });
@@ -503,15 +766,19 @@ $('#edit-form').addEventListener('submit', async (e) => {
     ov.hidden = $('#edit-hidden').checked || undefined;
   }
   if (ed.newImg) {
-    const imgKey = `img:${key}:${Date.now()}`;
+    const imgKey = `img:${state.pid}:${key}:${Date.now()}`;
     await blobs.set(imgKey, ed.newImg);
-    if (ov.img) { await blobs.del(ov.img); state.urls.delete(ov.img); }
+    if (ov.img) await dropBlob(ov.img);
     ov.img = imgKey;
+    delete ov.lib;
+  } else if (ed.pic) {
+    if (ov.img) { await dropBlob(ov.img); delete ov.img; }
+    if (ed.pic.lib) { ov.lib = ed.pic.lib; ov.sym = null; } else { ov.sym = ed.pic.sym; delete ov.lib; }
   } else if (ed.cell.empty && !ov.img) {
     ov.sym = null;
   }
   if (ed.newAudio) {
-    const audKey = `aud:${key}:${Date.now()}`;
+    const audKey = `aud:${state.pid}:${key}:${Date.now()}`;
     await blobs.set(audKey, ed.newAudio);
     if (ov.audio) await blobs.del(ov.audio);
     ov.audio = audKey;
@@ -520,7 +787,7 @@ $('#edit-form').addEventListener('submit', async (e) => {
     delete ov.audio;
   }
   state.overrides[key] = ov;
-  await kv.set('overrides', state.overrides);
+  await saveOverrides();
   dlgEdit.close();
   renderGrid();
 });
@@ -528,14 +795,50 @@ dlgEdit.addEventListener('close', () => { if (ed.recorder) ed.recorder.stop(); }
 
 // ---------- Start ----------
 
+// Version 0.2 had one board (keys "settings" and "overrides") in a 10 × 6 grid.
+// It becomes the first child, on the big board, with every change kept in place.
+async function migrateOldBoard() {
+  const p = { id: 'p1', name: 'Barn 1', size: DEFAULT_SIZE, photo: null };
+  const oldSettings = await kv.get('settings');
+  const old = await kv.get('overrides');
+  const ov = {};
+  for (const [k, v] of Object.entries(old || {})) {
+    const [a, b, c] = k.split(':');
+    if (a === 'fixed') ov[`large:frame:${b}:${c}`] = v;
+    else if (a === 'folders') ov[`large:frame:${Number(b) + 1}:9`] = v; // "Fraser" now sits on top
+    else ov[`large:${k}`] = v;
+  }
+  if (oldSettings) {
+    delete oldSettings.speakOnTap;
+    await kv.set(pk('settings', p.id), oldSettings);
+  }
+  await kv.set(pk('overrides', p.id), ov);
+  await kv.del('settings');
+  await kv.del('overrides');
+  await kv.set('profiles', [p]);
+  return [p];
+}
+
+async function openProfile() {
+  await kv.set('activeProfile', state.pid);
+  state.settings = { ...DEFAULTS, ...((await kv.get(pk('settings'))) || {}) };
+  state.overrides = (await kv.get(pk('overrides'))) || {};
+  state.page = 'core';
+  state.lastTap.clear();
+  hideForms();
+  await renderWho();
+  await renderGrid();
+}
+
 async function load() {
-  state.settings = { ...DEFAULTS, ...((await kv.get('settings')) || {}) };
-  state.overrides = (await kv.get('overrides')) || {};
+  let profiles = await kv.get('profiles');
+  if (!profiles?.length) profiles = await migrateOldBoard();
+  state.profiles = profiles;
+  const active = await kv.get('activeProfile');
+  state.pid = profiles.some((p) => p.id === active) ? active : profiles[0].id;
   state.urls.forEach((u) => URL.revokeObjectURL(u));
   state.urls.clear();
-  state.sentence = [];
-  await renderGrid();
-  await renderSentence();
+  await openProfile();
 }
 
 $('#app-version').textContent = VERSION;

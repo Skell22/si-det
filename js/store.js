@@ -1,5 +1,5 @@
 // Local storage on the device (IndexedDB). Nothing leaves the iPad.
-// Stores: "kv" for settings and word changes, "blobs" for photos and voice recordings.
+// Stores: "kv" for profiles, settings and word changes, "blobs" for photos and voice recordings.
 
 const DB_NAME = 'si-det';
 let dbPromise;
@@ -30,6 +30,9 @@ async function run(store, mode, fn) {
 export const kv = {
   get: (k) => run('kv', 'readonly', (s) => s.get(k)),
   set: (k, v) => run('kv', 'readwrite', (s) => s.put(v, k)),
+  del: (k) => run('kv', 'readwrite', (s) => s.delete(k)),
+  keys: () => run('kv', 'readonly', (s) => s.getAllKeys()),
+  clear: () => run('kv', 'readwrite', (s) => s.clear()),
 };
 
 export const blobs = {
@@ -53,10 +56,11 @@ const toDataURL = (blob) => new Promise((resolve) => {
   r.readAsDataURL(blob);
 });
 
+// Version 2 holds every child's profile. Version 1 files (one board) still load;
+// the app turns them into one profile.
 export async function exportBackup() {
-  const out = { app: 'si-det', version: 1, made: new Date().toISOString(), kv: {}, blobs: {} };
-  out.kv.settings = await kv.get('settings');
-  out.kv.overrides = await kv.get('overrides');
+  const out = { app: 'si-det', version: 2, made: new Date().toISOString(), kv: {}, blobs: {} };
+  for (const k of await kv.keys()) out.kv[k] = await kv.get(k);
   for (const k of await blobs.keys()) out.blobs[k] = await toDataURL(await blobs.get(k));
   return new Blob([JSON.stringify(out)], { type: 'application/json' });
 }
@@ -64,8 +68,8 @@ export async function exportBackup() {
 export async function importBackup(file) {
   const data = JSON.parse(await file.text());
   if (data.app !== 'si-det') throw new Error('Filen er ikke en sikkerhetskopi fra Si det.');
-  await kv.set('settings', data.kv?.settings ?? null);
-  await kv.set('overrides', data.kv?.overrides ?? {});
+  await kv.clear();
+  for (const [k, v] of Object.entries(data.kv ?? {})) if (v != null) await kv.set(k, v);
   await blobs.clear();
   for (const [k, url] of Object.entries(data.blobs ?? {})) {
     await blobs.set(k, await (await fetch(url)).blob());
