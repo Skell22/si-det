@@ -367,3 +367,6 @@ fieldset.field { border: 0; padding: 0; min-width: 0; }
 
 /* Phrases are long: a smaller label leaves room for the picture. */
 .key.c-fras .label { font-size: clamp(11px, 1.35vw, 17px); }
+
+/* "Tilpass til skjermen": visible keys fill the screen, column by column. */
+.grid[data-fit] { grid-auto-flow: column; }

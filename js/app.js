@@ -11,7 +11,7 @@ const CLASSES = [
   ['prep', 'Sted'], ['soc', 'Sosialt'], ['ques', 'Spørsmål'], ['adv', 'Adverb'], ['neg', 'Nei og stopp'],
   ['fras', 'Frase'],
 ];
-const DEFAULTS = { voiceURI: speech.OWN_VOICE, rate: 0.9, volume: speech.DEFAULT_VOLUME, forms: true, lockoutMs: 600 };
+const DEFAULTS = { voiceURI: speech.OWN_VOICE, rate: 0.9, volume: speech.DEFAULT_VOLUME, forms: true, lockoutMs: 600, fit: true };
 const HOLD_MS = 2000; // grown-up button
 const FORM_HOLD_MS = 550; // hold a word to see its other forms
 
@@ -86,6 +86,23 @@ async function findPictures(text) {
 
 // ---------- Rendering ----------
 
+// "Tilpass til skjermen": when words are hidden, leave out the gaps and let the
+// visible keys fill the screen. Keys keep their order column by column, so
+// jeg/vil stay on the left and the folders on the right. Grown-ups editing the
+// board always see the real fixed grid.
+function fitLayout(n) {
+  const w = grid.clientWidth || innerWidth;
+  const h = grid.clientHeight || innerHeight;
+  let best = null;
+  for (let rows = 1; rows <= n; rows++) {
+    const cols = Math.ceil(n / rows);
+    // Biggest key wins; keys may be a little wider than tall, not much taller than wide.
+    const score = Math.min(w / cols, (h / rows) * 1.3);
+    if (!best || score > best.score + 0.5) best = { rows, cols, score };
+  }
+  return best;
+}
+
 // Only the newest render may draw: a tap during a slow render must not be undone.
 let renderToken = 0;
 async function renderGrid() {
@@ -94,13 +111,28 @@ async function renderGrid() {
   const size = SIZES[id];
   if (!size.pages[state.page]) state.page = 'core';
   const page = state.page;
-  grid.dataset.size = id;
-  grid.style.setProperty('--cols', size.cols);
-  grid.style.setProperty('--rows', size.rows);
   const cells = baseCells(id, page).map(cellFrom);
   state.cells = cells;
+  let shown = cells;
+  let cols = size.cols;
+  let rows = size.rows;
+  const visible = cells.filter((c) => !c.empty && !c.hidden);
+  const fit = state.settings.fit && !state.editing && visible.length && visible.length < cells.length;
+  if (fit) {
+    // Column by column, as on the full board.
+    shown = cells.map((c, i) => ({ c, r: Math.floor(i / size.cols), col: i % size.cols }))
+      .filter(({ c }) => !c.empty && !c.hidden)
+      .sort((a, b) => a.col - b.col || a.r - b.r)
+      .map(({ c }) => c);
+    ({ cols, rows } = fitLayout(shown.length));
+  }
+  const n = cols * rows;
+  grid.dataset.size = fit ? (n <= 12 ? 'small' : n <= 24 ? 'medium' : id) : id;
+  grid.toggleAttribute('data-fit', !!fit);
+  grid.style.setProperty('--cols', cols);
+  grid.style.setProperty('--rows', rows);
   const frag = document.createDocumentFragment();
-  for (const cell of cells) {
+  for (const cell of shown) {
     const el = document.createElement('button');
     el.type = 'button';
     el.className = 'key';
@@ -485,6 +517,7 @@ $('#dlg-reveal').addEventListener('beforeopen', () => {
   const cells = allCellsOfSize();
   const shown = cells.filter((c) => !c.hidden).length;
   revealStatus.textContent = `${profile().name} ser ${shown} av ${cells.length} ord og mapper.`;
+  $('#set-fit').checked = state.settings.fit;
 });
 $('#btn-reveal-starter').addEventListener('click', async () => {
   // Folders count too: a folder with only hidden words is hidden as well.
@@ -500,6 +533,9 @@ $('#btn-reveal-all').addEventListener('click', async () => {
   renderGrid();
   revealStatus.textContent = 'Nå vises alle ordene.';
 });
+$('#set-fit').addEventListener('change', (e) => { state.settings.fit = e.target.checked; saveSettings(); renderGrid(); });
+let resizeTimer = null;
+window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(renderGrid, 150); });
 $('#btn-reveal-choose').addEventListener('click', () => { $('#dlg-reveal').close(); setEditing('reveal'); });
 
 // ---------- Backup ----------
