@@ -1,0 +1,17 @@
+{
+  "name": "Si det",
+  "short_name": "Si det",
+  "description": "Trykk på et bilde, så sier nettbrettet ordet.",
+  "lang": "nb",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#e9eeec",
+  "theme_color": "#e9eeec",
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "icons/icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

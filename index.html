@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="nb">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Si det</title>
+  <meta name="description" content="Si det: trykk på et bilde, så sier nettbrettet ordet. Gratis prototype for barn som bruker ASK.">
+  <meta name="theme-color" content="#e9eeec">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Si det">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="preload" href="fonts/atkinson-hyperlegible-next.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <main class="app" id="app">
+    <section class="bar" aria-label="Setningen">
+      <button class="bar-btn" id="btn-home" type="button" aria-label="Til forsiden">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9.5h13V10"/></svg>
+        <span>Hjem</span>
+      </button>
+      <div class="sentence" id="sentence" data-empty="Trykk på et bilde" role="status" aria-live="polite"></div>
+      <button class="bar-btn hold" id="btn-back" type="button" aria-label="Fjern siste ord. Hold inne for å tømme setningen">
+        <span class="fill" aria-hidden="true"></span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5h11v14H9l-6-7z"/><path d="m12.5 9.5 5 5m0-5-5 5"/></svg>
+        <span>Slett</span>
+      </button>
+      <button class="bar-btn say" id="btn-say" type="button">Si det</button>
+      <button class="bar-btn hold" id="btn-grownup" type="button" aria-label="Voksen: hold inne i to sekunder">
+        <span class="fill" aria-hidden="true"></span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>
+        <span>Voksen</span>
+      </button>
+    </section>
+
+    <section class="grid" id="grid" aria-label="Ord"></section>
+  </main>
+
+  <div class="edit-banner" id="edit-banner" hidden>
+    <span>Trykk på et ord for å endre det, eller på + for et nytt ord.</span>
+    <button type="button" id="btn-edit-done">Ferdig</button>
+  </div>
+
+  <!-- Grown-up menu -->
+  <dialog id="dlg-menu">
+    <div class="sheet">
+      <header><h2>For voksne</h2></header>
+      <div class="body">
+        <div class="menu">
+          <button class="btn" type="button" data-open="edit">Endre ord<small>Bytt bilde, ord eller stemme, legg til nye ord, skjul ord</small></button>
+          <button class="btn" type="button" data-open="dlg-settings">Innstillinger<small>Stemme, tempo og hvordan trykk virker</small></button>
+          <button class="btn" type="button" data-open="dlg-backup">Sikkerhetskopi<small>Lagre alt på en fil, eller hent det tilbake</small></button>
+          <button class="btn" type="button" data-open="dlg-help">Lås og installer<small>Legg Si det på Hjem-skjermen og lås barnet i appen</small></button>
+          <button class="btn" type="button" data-open="dlg-about">Om Si det og lisenser</button>
+        </div>
+      </div>
+      <footer><button class="btn primary" type="button" data-close>Lukk</button></footer>
+    </div>
+  </dialog>
+
+  <!-- Settings -->
+  <dialog id="dlg-settings">
+    <div class="sheet">
+      <header><h2>Innstillinger</h2></header>
+      <div class="body">
+        <div class="field">
+          <label for="set-voice">Stemme</label>
+          <select id="set-voice"></select>
+          <p class="hint" id="voice-hint"></p>
+          <div><button class="btn" type="button" id="btn-test-voice">Prøv stemmen</button></div>
+        </div>
+        <div class="field">
+          <label for="set-rate">Tempo: <span id="rate-out"></span></label>
+          <input type="range" id="set-rate" min="0.6" max="1.2" step="0.05">
+        </div>
+        <label class="check"><input type="checkbox" id="set-speak-tap"> Si ordet med en gang det trykkes</label>
+        <div class="field">
+          <label for="set-lockout">Ignorer gjentatte trykk på samme ord</label>
+          <select id="set-lockout">
+            <option value="0">Nei</option>
+            <option value="300">I 0,3 sekunder</option>
+            <option value="600">I 0,6 sekunder</option>
+            <option value="1000">I 1 sekund</option>
+            <option value="1500">I 1,5 sekunder</option>
+          </select>
+          <p class="hint">Hjelper barn som trykker flere ganger eller hviler hånden på skjermen.</p>
+        </div>
+      </div>
+      <footer><button class="btn primary" type="button" data-close>Ferdig</button></footer>
+    </div>
+  </dialog>
+
+  <!-- Backup -->
+  <dialog id="dlg-backup">
+    <div class="sheet">
+      <header><h2>Sikkerhetskopi</h2></header>
+      <div class="body">
+        <p>Alt lagres bare på dette nettbrettet. Sletter du appen fra Hjem-skjermen, forsvinner ordene, bildene og opptakene. Ta en kopi ofte, og legg den i Filer eller iCloud.</p>
+        <div class="menu">
+          <button class="btn" type="button" id="btn-export">Lagre sikkerhetskopi<small>Lager en fil med alle endringer, bilder og opptak</small></button>
+          <label class="btn" for="file-import">Hent fra sikkerhetskopi<small>Erstatter alt med innholdet i filen</small></label>
+          <input type="file" id="file-import" accept="application/json,.json" hidden>
+          <button class="btn danger" type="button" id="btn-reset">Start på nytt<small>Fjerner alle endringer og går tilbake til startordene</small></button>
+        </div>
+        <p class="status" id="backup-status"></p>
+      </div>
+      <footer><button class="btn primary" type="button" data-close>Lukk</button></footer>
+    </div>
+  </dialog>
+
+  <!-- Help: install + Guided Access -->
+  <dialog id="dlg-help">
+    <div class="sheet">
+      <header><h2>Lås og installer</h2></header>
+      <div class="body">
+        <h3>Legg Si det på Hjem-skjermen</h3>
+        <p>Åpne Si det i Safari, trykk på Del-knappen og velg «Legg til på Hjem-skjerm». Da åpnes den i full skjerm og virker uten internett.</p>
+        <h3>Lås barnet i appen med Guidet tilgang</h3>
+        <p>Gå til Innstillinger → Tilgjengelighet → Guidet tilgang, slå det på og velg en kode barnet ikke kjenner.</p>
+        <p>Åpne Si det og trykk tre ganger på sideknappen (eller Hjem-knappen). Trykk «Start». For å avslutte trykker du tre ganger igjen og skriver koden.</p>
+        <h3>Knappen «Voksen»</h3>
+        <p>Hold inne «Voksen» i to sekunder for å åpne denne menyen. Et kort trykk gjør ingenting, så barnet kommer ikke inn ved et uhell.</p>
+      </div>
+      <footer><button class="btn primary" type="button" data-close>Lukk</button></footer>
+    </div>
+  </dialog>
+
+  <!-- About + licences -->
+  <dialog id="dlg-about">
+    <div class="sheet">
+      <header><h2>Om Si det</h2></header>
+      <div class="body licence">
+        <p>Si det er en gratis prototype til utprøving. Den er ikke et ferdig hjelpemiddel og ikke godkjent som medisinsk utstyr. Bruk den sammen med logoped eller ASK-team.</p>
+        <p>Ingenting sendes fra nettbrettet. Ord, bilder og opptak lagres bare her.</p>
+        <h3>Symboler</h3>
+        <p>Piktogrammene er laget av Sergio Palao for ARASAAC (arasaac.org), eies av regjeringen i Aragón (Spania) og brukes under lisensen CC BY-NC-SA 4.0. De kan ikke brukes kommersielt.</p>
+        <h3>Skrift</h3>
+        <p>Atkinson Hyperlegible Next fra Braille Institute, SIL Open Font License 1.1.</p>
+        <h3>Stemme</h3>
+        <p>Si det-stemmen er laget med Piper-stemmen «talesyntese», som er trent på åpne data (CC0) fra Språkbanken ved Nasjonalbiblioteket. Ord du legger til selv, sies med nettbrettets stemme. Opptak du lager, lagres bare på nettbrettet.</p>
+        <p class="hint">Versjon <span id="app-version"></span></p>
+      </div>
+      <footer><button class="btn primary" type="button" data-close>Lukk</button></footer>
+    </div>
+  </dialog>
+
+  <!-- Word editor -->
+  <dialog id="dlg-edit">
+    <form class="sheet" method="dialog" id="edit-form">
+      <header><h2 id="edit-title">Endre ord</h2></header>
+      <div class="body">
+        <div class="preview-row">
+          <div class="preview" id="edit-preview"><img alt=""><span></span></div>
+          <div class="preview-actions">
+            <label class="btn" for="edit-photo">Bruk eget bilde</label>
+            <input type="file" id="edit-photo" accept="image/*" hidden>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="edit-label">Ord på knappen</label>
+          <input type="text" id="edit-label" autocomplete="off" autocapitalize="off" spellcheck="false" required>
+        </div>
+        <div class="field" id="edit-say-field">
+          <label for="edit-say">Det stemmen sier (hvis annet enn ordet)</label>
+          <input type="text" id="edit-say" autocomplete="off" placeholder="For eksempel «Jeg vil ha mer»">
+        </div>
+
+        <fieldset class="field" id="edit-class-field">
+          <legend>Ordklasse (farge)</legend>
+          <div class="classes" id="edit-classes"></div>
+        </fieldset>
+
+        <div class="field">
+          <label for="edit-search">Finn symbol</label>
+          <div class="preview-row">
+            <input type="search" id="edit-search" placeholder="Søk på norsk eller engelsk" class="grow">
+            <button class="btn" type="button" id="btn-search">Søk</button>
+          </div>
+          <p class="status" id="search-status"></p>
+          <div class="results" id="search-results"></div>
+        </div>
+
+        <div class="field" id="edit-rec-field">
+          <span class="field-label">Egen stemme</span>
+          <div class="rec" id="rec">
+            <span class="dot" aria-hidden="true"></span>
+            <button class="btn" type="button" id="btn-rec">Ta opp</button>
+            <button class="btn" type="button" id="btn-play" disabled>Spill av</button>
+            <button class="btn" type="button" id="btn-rec-del" disabled>Fjern opptak</button>
+          </div>
+          <p class="hint" id="rec-hint">Ta opp mamma, pappa eller et søsken som sier ordet. Da brukes opptaket i stedet for nettbrettets stemme.</p>
+        </div>
+
+        <label class="check" id="edit-hidden-field"><input type="checkbox" id="edit-hidden"> Skjul ordet for barnet (plassen holdes ledig)</label>
+      </div>
+      <footer>
+        <button class="btn danger" type="button" id="btn-remove">Fjern ordet</button>
+        <span class="spacer"></span>
+        <button class="btn" type="button" data-close>Avbryt</button>
+        <button class="btn primary" type="submit" id="btn-save">Lagre</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
